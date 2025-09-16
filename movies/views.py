@@ -1,6 +1,7 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from .models import Movie, Review
 from django.contrib.auth.decorators import login_required
+from django.contrib import messages  # NEW
 
 def index(request):
     search_term = request.GET.get('search')
@@ -15,8 +16,9 @@ def index(request):
     return render(request, 'movies/index.html', {'template_data': template_data})
 
 def show(request, id):
-    movie = Movie.objects.get(id=id)
-    reviews = Review.objects.filter(movie=movie)
+    movie = get_object_or_404(Movie, id=id)
+    # CHANGED: hide flagged reviews and show newest first
+    reviews = Review.objects.filter(movie=movie, is_flagged=False).order_by('-date')
 
     template_data = {}
     template_data['title'] = movie.name
@@ -26,12 +28,13 @@ def show(request, id):
 
 @login_required
 def create_review(request, id):
-    if request.method == 'POST' and request.POST['comment'] != '':
-        movie = Movie.objects.get(id=id)
-        review = Review()
-        review.comment = request.POST['comment']
-        review.movie = movie
-        review.user = request.user
+    if request.method == 'POST' and request.POST.get('comment', '').strip() != '':
+        movie = get_object_or_404(Movie, id=id)
+        review = Review(
+            comment=request.POST['comment'],
+            movie=movie,
+            user=request.user
+        )
         review.save()
         return redirect('movies.show', id=id)
     else:
@@ -44,12 +47,9 @@ def edit_review(request, id, review_id):
         return redirect('movies.show', id=id)
 
     if request.method == 'GET':
-        template_data = {}
-        template_data['title'] = 'Edit Review'
-        template_data['review'] = review
+        template_data = {'title': 'Edit Review', 'review': review}
         return render(request, 'movies/edit_review.html', {'template_data': template_data})
-    elif request.method == 'POST' and request.POST['comment'] != '':
-        review = Review.objects.get(id=review_id)
+    elif request.method == 'POST' and request.POST.get('comment', '').strip() != '':
         review.comment = request.POST['comment']
         review.save()
         return redirect('movies.show', id=id)
@@ -60,4 +60,21 @@ def edit_review(request, id, review_id):
 def delete_review(request, id, review_id):
     review = get_object_or_404(Review, id=review_id, user=request.user)
     review.delete()
+    return redirect('movies.show', id=id)
+
+# NEW: Report a review (POST-only), flagging it so it disappears from the page
+@login_required
+def report_review(request, id, review_id):
+    if request.method != 'POST':
+        return redirect('movies.show', id=id)
+
+    review = get_object_or_404(Review, id=review_id, movie_id=id)
+    # Optional: prevent authors from reporting their own review
+    # if review.user_id == request.user.id:
+    #     messages.error(request, "You can’t report your own review.")
+    #     return redirect('movies.show', id=id)
+
+    review.is_flagged = True
+    review.save(update_fields=['is_flagged'])
+    messages.success(request, "Thanks—this review was reported and is now hidden.")
     return redirect('movies.show', id=id)
